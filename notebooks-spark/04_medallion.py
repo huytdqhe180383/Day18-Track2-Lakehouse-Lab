@@ -25,6 +25,12 @@ BRONZE = "s3a://bronze/llm_calls_raw"
 SILVER = "s3a://silver/llm_calls"
 GOLD   = "s3a://gold/llm_daily_metrics"
 
+def describe_delta(path: str, name: str) -> None:
+    print(f"\n[{name}] {path}")
+    (spark.sql(f"DESCRIBE DETAIL delta.`{path}`")
+        .select("format", "numFiles", "sizeInBytes")
+        .show(truncate=False))
+
 # %% [markdown]
 # ## Bronze — verify raw is loaded
 
@@ -33,6 +39,7 @@ bronze = spark.read.format("delta").load(BRONZE)
 print("Bronze rows:", bronze.count())
 bronze.printSchema()
 bronze.show(2, truncate=80)
+describe_delta(BRONZE, "BRONZE")
 
 # %% [markdown]
 # ## Silver — parse, validate, dedup
@@ -72,6 +79,8 @@ silver_df = (
 (silver_df.write.format("delta").mode("overwrite")
     .partitionBy("date")
     .save(SILVER))
+
+describe_delta(SILVER, "SILVER")
 
 bronze_n = bronze.count()
 silver_n = spark.read.format("delta").load(SILVER).count()
@@ -120,11 +129,47 @@ gold_df = (silver
 # Z-ORDER by model for fast filter-by-model dashboards
 spark.sql(f"OPTIMIZE delta.`{GOLD}` ZORDER BY (model)")
 
+describe_delta(GOLD, "GOLD")
+
 # %% [markdown]
 # ## Verify Gold
 
 # %%
-spark.read.format("delta").load(GOLD).orderBy("date", "model").show(20, truncate=False)
+gold = spark.read.format("delta").load(GOLD)
+gold.orderBy("date", "model").show(20, truncate=False)
+
+# Gold validation for rubric
+date_count = gold.select("date").distinct().count()
+model_count = gold.select("model").distinct().count()
+row_count = gold.count()
+expected = date_count * model_count
+print(
+    f"Gold rows: {row_count}  (dates={date_count}, models={model_count}, expected={expected})"
+)
+print("Date span OK (≥ 7):", date_count >= 7)
+print("Model count OK (≥ 3):", model_count >= 3)
+assert date_count >= 7, f"Gold has only {date_count} dates; rubric requires >= 7."
+assert model_count >= 3, f"Gold has only {model_count} models; expected >= 3."
+assert row_count == expected, (
+    f"Gold row shape mismatch: rows={row_count}, expected dates*models={expected}."
+)
+
+nulls = gold.select(
+    F.sum(F.col("p50_latency_ms").isNull().cast("int")).alias("p50_nulls"),
+    F.sum(F.col("p95_latency_ms").isNull().cast("int")).alias("p95_nulls"),
+    F.sum(F.col("cost_usd").isNull().cast("int")).alias("cost_nulls"),
+    F.sum(F.col("error_rate").isNull().cast("int")).alias("error_nulls"),
+).collect()[0]
+print(
+    "Nulls - p50:", nulls["p50_nulls"],
+    "p95:", nulls["p95_nulls"],
+    "cost:", nulls["cost_nulls"],
+    "error:", nulls["error_nulls"],
+)
+print("Cost column populated:", gold.where("cost_usd > 0").count() > 0)
+assert nulls["p50_nulls"] == 0 and nulls["p95_nulls"] == 0, "Latency aggregates contain NULL values."
+assert nulls["cost_nulls"] == 0 and nulls["error_nulls"] == 0, "cost_usd/error_rate contains NULL values."
+assert gold.where("cost_usd > 0").count() > 0, "cost_usd is not populated with positive values."
 
 # %% [markdown]
 # ## ✅ Deliverable check

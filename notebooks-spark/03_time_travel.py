@@ -50,7 +50,10 @@ t0 = time.time()
        .whenMatchedUpdateAll()
        .whenNotMatchedInsertAll()
        .execute())                                                # v2
-print(f"MERGE 100K rows: {time.time()-t0:.2f}s")
+merge_sec = time.time() - t0
+print(f"MERGE 100K rows: {merge_sec:.2f}s  (target < 60s)")
+print("MERGE SLA met:", merge_sec < 60)
+assert merge_sec < 60, f"MERGE exceeded SLA: {merge_sec:.2f}s (target < 60s)."
 
 # v3 — simulate bad data
 bad = spark.range(50).select(F.col("id").alias("customer_id"),
@@ -80,12 +83,16 @@ print("v1 schema:", spark.read.format("delta").option("versionAsOf", 1).load(pat
 # %%
 t0 = time.time()
 DeltaTable.forPath(spark, path).restoreToVersion(2)
-print(f"RESTORE: {time.time()-t0:.2f}s   (target < 30s)")
+restore_sec = time.time() - t0
+print(f"RESTORE: {restore_sec:.2f}s   (target < 30s)")
+print("RESTORE SLA met:", restore_sec < 30)
+assert restore_sec < 30, f"RESTORE exceeded SLA: {restore_sec:.2f}s (target < 30s)."
 
 # Verify the bad rows are gone
 bad_count = (spark.read.format("delta").load(path)
              .where("score < 0").count())
 print(f"Rows with score<0 after restore: {bad_count}  (expected 0)")
+assert bad_count == 0, f"RESTORE verification failed: found {bad_count} rows with score < 0."
 
 # %% [markdown]
 # ## 5. Final history — now includes the RESTORE row
@@ -98,6 +105,7 @@ final = spark.sql(f"DESCRIBE HISTORY delta.`{path}`").select("version", "operati
 for r in final:
     print(f"  v{r['version']:>2}  {r['operation']}")
 print(f"\nTotal versions: {len(final)}  (target ≥ 5)")
+assert len(final) >= 5, "History does not show ≥ 5 versions (including RESTORE)."
 
 # %% [markdown]
 # ## ✅ Deliverable check
