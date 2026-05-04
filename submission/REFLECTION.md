@@ -1,0 +1,5 @@
+Our team’s data is most at risk of becoming a **data swamp**: the Bronze layer contains raw LLM call JSON with retries, malformed payloads, and mixed operational signals. If we let people query Bronze directly, metrics like latency, cost, and error rate will drift depending on duplicate request_ids, bad records, or schema changes.
+
+The notebooks make this risk visible. In NB4, Silver is smaller than Bronze because deduplication removes repeated requests before aggregation, and Gold only becomes trustworthy after we normalize the raw events into stable typed columns. That is exactly the discipline that keeps a lakehouse from turning into an expensive dump.
+
+To avoid this anti-pattern, we should treat Bronze as immutable ingestion only, enforce validation in Silver, and publish dashboards from Gold rather than from raw files. That keeps the pipeline auditable, reproducible, and much easier to trust when the data volume grows.
